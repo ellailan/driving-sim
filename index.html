@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vancouver Drive - Unified Controls</title>
+<title>Vancouver Drive - UBC Campus</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #1a1a2e; font-family: 'Courier New', monospace; overflow: hidden; }
@@ -20,7 +20,8 @@
 <body>
 <canvas id="c"></canvas>
 <div id="ui">
-  <div id="location-tag">📍 Vancouver City Center</div>
+  <!-- Updated location text to match starting coordinates -->
+  <div id="location-tag">📍 UBC Vancouver</div>
   <div id="compass">
     <svg id="compass-needle" width="36" height="36" viewBox="0 0 30 30">
       <polygon points="15,3 18,15 15,13 12,15" fill="#ff4444"/>
@@ -30,7 +31,7 @@
   <div id="hud">
     <div class="hud-panel">Speed<span class="hud-val" id="speed-val">0</span> km/h</div>
     <div class="hud-panel">Heading<span class="hud-val" id="heading-val">N</span></div>
-    <div class="hud-panel">Coords<span class="hud-val" id="coord-val" style="font-size:14px;margin-top:6px">49.2827°N</span></div>
+    <div class="hud-panel">Coords<span class="hud-val" id="coord-val" style="font-size:14px;margin-top:6px"></span></div>
   </div>
   <div id="controls-hint">
     <b>GAS:</b> W / ↑<br>
@@ -55,8 +56,11 @@ function lon2tile(lon, zoom) { return (lon + 180) / 360 * Math.pow(2, zoom); }
 function tile2lat(y, zoom) { const n = Math.PI - 2 * Math.PI * y / Math.pow(2, zoom); return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); }
 function tile2lon(x, zoom) { return x / Math.pow(2, zoom) * 360 - 180; }
 
-let camX = lon2tile(-123.1207, ZOOM);
-let camY = lat2tile(49.2827, ZOOM);
+// === Initialize us at requested coordinates ===
+// lat: 49.262341, lon: -123.247694 (UBC Nest Area)
+let camX = lon2tile(-123.247694, ZOOM);
+let camY = lat2tile(49.262341, ZOOM);
+
 const tileCache = {};
 const tileLoading = {};
 
@@ -93,7 +97,6 @@ let car = {
 const keys = {};
 window.addEventListener('keydown', e => { 
   keys[e.code] = true; 
-  // Prevent scrolling for all gameplay keys
   if(["Space", "ArrowUp", "ArrowDown", "KeyW", "KeyS", "ArrowLeft", "ArrowRight", "KeyA", "KeyD"].includes(e.code)) e.preventDefault(); 
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
@@ -118,48 +121,74 @@ function drawMap() {
   }
 }
 
+// Custom helper for rounded rectangles to make the car rounder[cite: 1]
+function drawRoundedRect(ctx, x, y, width, height, radius) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
 function drawCar() {
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(car.angle);
+
+  // Set the roundness level
+  const cornerRadius = 15; 
+
+  // === Shadow (Rounded) ===
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.fillRect(-CAR_W/2 + 5, -CAR_H/2 + 5, CAR_W, CAR_H);
-  ctx.fillStyle = '#e63946';
-  ctx.fillRect(-CAR_W/2, -CAR_H/2, CAR_W, CAR_H);
+  drawRoundedRect(ctx, -CAR_W/2 + 5, -CAR_H/2 + 5, CAR_W, CAR_H, cornerRadius);
+  ctx.fill();
+
+  // === Car Body (White, Rounder) ===
+  ctx.fillStyle = '#ffffff'; 
+  drawRoundedRect(ctx, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H, cornerRadius);
+  ctx.fill();
+
+  // === Windshields & Roof (Rounded dark grey area) ===
   ctx.fillStyle = '#222';
-  ctx.fillRect(-CAR_W/2 + 4, -CAR_H/2 + 15, CAR_W - 8, 40);
+  // Central core area for windows/roof
+  drawRoundedRect(ctx, -CAR_W/2 + 4, -CAR_H/2 + 15, CAR_W - 8, 40, 5);
+  ctx.fill();
+
+  // Windshield blue-glare area (Rounded)
   ctx.fillStyle = 'rgba(180,220,255,0.9)';
-  ctx.fillRect(-CAR_W/2 + 6, -CAR_H/2 + 18, CAR_W - 12, 12);
+  drawRoundedRect(ctx, -CAR_W/2 + 6, -CAR_H/2 + 18, CAR_W - 12, 12, 3);
+  ctx.fill();
+
   ctx.restore();
 }
 
 // --- Logic Implementation ---
 function update() {
-  const gas   = keys['KeyW']  || keys['ArrowUp']; //
-  // Consolidated Brake: Down Arrow, S, and Space all trigger brakePower
+  const gas   = keys['KeyW']  || keys['ArrowUp']; //[cite: 1]
   const brake = keys['KeyS']  || keys['ArrowDown'] || keys['Space']; 
   const left  = keys['KeyA']  || keys['ArrowLeft'];
   const right = keys['KeyD']  || keys['ArrowRight'];
 
-  // Acceleration (Forward only)
   if (gas) {
     car.speed = Math.min(car.speed + car.accel, car.maxSpeed);
   }
 
-  // Unified Braking (No reverse)
   if (brake) {
     car.speed = Math.max(car.speed - car.brakePower, 0);
   }
 
-  // Rolling friction
   if (!gas) car.speed *= car.friction;
 
-  // Stop clamp
   if (car.speed < 0.00001) car.speed = 0;
 
-  // Steering
   if (car.speed > 0) {
     const turnSensitivity = Math.min(car.speed / (car.maxSpeed * 0.2), 1.0);
     const turn = car.turnSpeed * turnSensitivity;
@@ -170,7 +199,6 @@ function update() {
   car.x += Math.sin(car.angle) * car.speed;
   car.y -= Math.cos(car.angle) * car.speed;
 
-  // HUD Update
   const kmh = Math.round(car.speed / car.maxSpeed * 120);
   const speedEl = document.getElementById('speed-val');
   speedEl.textContent = kmh;
@@ -182,8 +210,9 @@ function update() {
   
   const lat = tile2lat(car.y, ZOOM);
   const lon = tile2lon(car.x, ZOOM);
+  // LatLon coords updated dynamically
   document.getElementById('coord-val').textContent =
-    `${Math.abs(lat).toFixed(4)}°N ${Math.abs(lon).toFixed(4)}°W`;
+    `${Math.abs(lat).toFixed(6)}°N ${Math.abs(lon).toFixed(6)}°W`;
   document.getElementById('compass-needle').style.transform = `rotate(${car.angle}rad)`;
 }
 
