@@ -165,7 +165,7 @@ let soc = 0.92;                   // start at 92%
 // Lap tracking — car returns within threshold of start point
 const LAP_ORIGIN_X = lon2tile(START_LON, ZOOM);
 const LAP_ORIGIN_Y = lat2tile(START_LAT, ZOOM);
-const LAP_TRIGGER_DIST = 0.012;  // tile units — generous zone around start point
+const LAP_TRIGGER_DIST = (CAR_W / 2) / TILE_SIZE;  // half car width in tile units (~0.082)
 let lapIndex = 1;
 let lapIndexSpreadsheet = 1;
 let trackIndex = 0;               // 0–1 rough progress within lap, derived from distance
@@ -403,39 +403,28 @@ function drawCar() {
   ctx.restore();
 }
 
-// Draw the start/finish star at the FSGP origin point
+// Draw a big star at the FSGP origin point
 function drawStartStar() {
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
-  // Convert origin tile coords to screen coords
   const sx = cx + (LAP_ORIGIN_X - car.x) * TILE_SIZE;
   const sy = cy + (LAP_ORIGIN_Y - car.y) * TILE_SIZE;
 
   ctx.save();
   ctx.translate(sx, sy);
 
-  // Trigger zone ring
-  const zoneRadius = LAP_TRIGGER_DIST * TILE_SIZE;
+  // Outer glow
+  const glow = ctx.createRadialGradient(0, 0, 8, 0, 0, 52);
+  glow.addColorStop(0, 'rgba(255, 220, 0, 0.45)');
+  glow.addColorStop(1, 'rgba(255, 220, 0, 0)');
   ctx.beginPath();
-  ctx.arc(0, 0, zoneRadius, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(255, 210, 0, 0.25)';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([4, 4]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Glow ring
-  const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 22);
-  glow.addColorStop(0, 'rgba(255, 210, 0, 0.5)');
-  glow.addColorStop(1, 'rgba(255, 210, 0, 0)');
-  ctx.beginPath();
-  ctx.arc(0, 0, 22, 0, Math.PI * 2);
+  ctx.arc(0, 0, 52, 0, Math.PI * 2);
   ctx.fillStyle = glow;
   ctx.fill();
 
   // 5-point star
+  const spikes = 5, outerR = 38, innerR = 16;
   ctx.beginPath();
-  const spikes = 5, outerR = 14, innerR = 6;
   for (let i = 0; i < spikes * 2; i++) {
     const r = i % 2 === 0 ? outerR : innerR;
     const a = (i * Math.PI) / spikes - Math.PI / 2;
@@ -445,18 +434,18 @@ function drawStartStar() {
   ctx.closePath();
   ctx.fillStyle = '#ffd700';
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2.5;
   ctx.fill();
   ctx.stroke();
 
   // "START" label
-  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.font = 'bold 11px Courier New, monospace';
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.shadowColor = 'rgba(0,0,0,0.8)';
-  ctx.shadowBlur = 4;
-  ctx.fillText('START', 0, 18);
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 5;
+  ctx.fillText('START', 0, outerR + 4);
   ctx.shadowBlur = 0;
 
   ctx.restore();
@@ -586,7 +575,7 @@ function update() {
   const nearOrigin = distToOrigin < LAP_TRIGGER_DIST;
 
   // Must have travelled at least 0.05 tile units (~400m) before a lap can complete
-  const MIN_LAP_DIST = 0.008;
+  const MIN_LAP_DIST = 1.0;
   if (nearOrigin && !nearOriginLast && lapDistAccum > MIN_LAP_DIST) {
     lapDistTotal = lapDistAccum;
     lapDistAccum = 0;
