@@ -259,13 +259,30 @@ function buildPacket(now) {
   const kmh = car.speed / car.maxSpeed * 120;
   const ms  = kmh / 3.6;
 
+  const speedRatio = car.speed / car.maxSpeed;
+  const isGas   = speedRatio > 0.001 && batteryCurrent > 0;
+  const isBrake = batteryCurrent < 0;
+
+  // Solar array currents — GHI-driven, split across two strings with small noise
+  const arrayCurrent = (irr.GHI / 1000) * 8.5; // up to ~8.5 A at peak sun
+  const cur1 = Math.max(0, arrayCurrent * 0.52 + (Math.random() - 0.5) * 0.05);
+  const cur2 = Math.max(0, arrayCurrent * 0.48 + (Math.random() - 0.5) * 0.05);
+
   return {
     timestamp: now,
     lat, lon,
 
     // Motion
-    VehicleVelocity:  ms,
-    SteeringAngle:    steeringAngle,
+    VehicleVelocity:     ms,
+    SteeringAngle:       steeringAngle,
+
+    // Throttle & brake — derived from car physics
+    AcceleratorPosition: isGas  ? Math.min(speedRatio, 1) : 0,
+    MechBrakePressed:    isBrake ? 1 : 0,
+
+    // Solar array strings
+    CurrentSensor1:      cur1,
+    CurrentSensor2:      cur2,
 
     // Battery / power
     SOC:              soc,
@@ -281,12 +298,12 @@ function buildPacket(now) {
 
     // Efficiency (J/m — energy per metre travelled)
     Efficiency5Minute: eff5MinN > 0 ? eff5MinAcc / eff5MinN : 0,
-    Efficiency1Hour:   eff5MinN > 0 ? eff5MinAcc / eff5MinN : 0, // same sim source
+    Efficiency1Hour:   eff5MinN > 0 ? eff5MinAcc / eff5MinN : 0,
     EfficiencyLap:     effLapN  > 0 ? effLapAcc  / effLapN  : 0,
 
     // Energy totals (Wh consumed so far)
-    EnergyVOLExtrapolated:      (1 - soc) * PACK_CAPACITY_WH,
-    EnergyFromIntegratedPower:  (1 - soc) * PACK_CAPACITY_WH,
+    EnergyVOLExtrapolated:     (1 - soc) * PACK_CAPACITY_WH,
+    EnergyFromIntegratedPower: (1 - soc) * PACK_CAPACITY_WH,
 
     // Lap / track
     LapIndex:             lapIndex,
@@ -295,14 +312,14 @@ function buildPacket(now) {
     TrackDistSpreadsheet: trackIndex * 5040,
 
     // Weather
-    AirTemperature:   wx.airTemp,
-    WindSpeed:        wx.windSpeed,
-    WindDirection:    wx.windDir,
+    AirTemperature:    wx.airTemp,
+    WindSpeed:         wx.windSpeed,
+    WindDirection:     wx.windDir,
     PrecipitationRate: wx.precipRate,
-    GHI:              irr.GHI,
-    DNI:              irr.DNI,
-    DHI:              irr.DHI,
-    Zenith:           irr.zenith,
+    GHI:               irr.GHI,
+    DNI:               irr.DNI,
+    DHI:               irr.DHI,
+    Zenith:            irr.zenith,
   };
 }
 
