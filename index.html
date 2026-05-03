@@ -11,29 +11,34 @@
   #hud { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 32px; align-items: flex-end; }
   .hud-panel { background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.6); border-radius: 4px; padding: 12px 20px; color: #ffd700; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
   .hud-val { font-size: 32px; display: block; line-height: 1; margin-top: 2px; color: #fff; }
-  #location-tag { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.6); border-radius: 3px; color: #ffd700; font-size: 14px; letter-spacing: 0.2em; padding: 10px 24px; text-transform: uppercase; }
   #controls-hint { position: absolute; bottom: 120px; right: 24px; background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 14px 18px; color: rgba(255,255,255,0.8); font-size: 11px; line-height: 1.8; }
   canvas { display: block; }
   #compass { position: absolute; top: 20px; right: 24px; width: 60px; height: 60px; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  #weather-hud { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.4); border-radius: 4px; padding: 10px 16px; color: #ffd700; font-size: 10px; letter-spacing: 0.1em; line-height: 2; }
+  #weather-hud span { color: #fff; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="ui">
-  <!-- Updated location text to match starting coordinates -->
-  <div id="location-tag">📍 UBC Vancouver</div>
   <div id="compass">
     <svg id="compass-needle" width="36" height="36" viewBox="0 0 30 30">
       <polygon points="15,3 18,15 15,13 12,15" fill="#ff4444"/>
       <polygon points="15,27 18,15 15,17 12,15" fill="#aaa"/>
     </svg>
   </div>
+  <div id="weather-hud">
+    TEMP &nbsp;<span id="w-temp">—</span> °C &nbsp;|&nbsp;
+    WIND &nbsp;<span id="w-wind">—</span> m/s &nbsp;|&nbsp;
+    GHI &nbsp;<span id="w-ghi">—</span> W/m² &nbsp;|&nbsp;
+    SOC &nbsp;<span id="w-soc">—</span>%
+  </div>
   <div id="hud">
     <div class="hud-panel">Speed<span class="hud-val" id="speed-val">0</span> km/h</div>
     <div class="hud-panel">Heading<span class="hud-val" id="heading-val">N</span></div>
     <div class="hud-panel">Coords<span class="hud-val" id="coord-val" style="font-size:14px;margin-top:6px"></span></div>
+    <div class="hud-panel">Lap Dist<span class="hud-val" id="dist-val" style="font-size:20px;margin-top:4px">0.000</span></div>
   </div>
-  <div id="controls-hint">
     <b>GAS:</b> W / ↑<br>
     <b>BRAKE:</b> S / ↓ / SPACE<br>
     <b>STEER:</b> A / D / ← →
@@ -41,7 +46,7 @@
 </div>
 
 <script>
-// --- Canvas & Map Configuration ---
+// ─── Canvas & Map ─────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
@@ -56,10 +61,9 @@ function lon2tile(lon, zoom) { return (lon + 180) / 360 * Math.pow(2, zoom); }
 function tile2lat(y, zoom) { const n = Math.PI - 2 * Math.PI * y / Math.pow(2, zoom); return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); }
 function tile2lon(x, zoom) { return x / Math.pow(2, zoom) * 360 - 180; }
 
-// === Initialize us at requested coordinates ===
-// lat: 49.262341, lon: -123.247694 (UBC Nest Area)
-let camX = lon2tile(-123.247694, ZOOM);
-let camY = lat2tile(49.262341, ZOOM);
+// FSGP track start point
+const START_LAT = 37.0011529;
+const START_LON = -86.36837867;
 
 const tileCache = {};
 const tileLoading = {};
@@ -78,29 +82,193 @@ function getTile(tx, ty, zoom) {
   return null;
 }
 
-// --- Car State & Proportional Physics ---
-const CAR_W = 42; 
+// ─── Car State ────────────────────────────────────────────────────────────────
+const CAR_W = 42;
 const CAR_H = 80;
 
 let car = {
-  x: camX,
-  y: camY,
+  x: lon2tile(START_LON, ZOOM),
+  y: lat2tile(START_LAT, ZOOM),
   angle: 0,
   speed: 0,
-  maxSpeed: 0.006,    
-  accel: 0.00012,    
+  maxSpeed: 0.006,
+  accel: 0.00012,
   brakePower: 0.00025,
-  friction: 0.985,   
-  turnSpeed: 0.055,  
+  friction: 0.985,
+  turnSpeed: 0.055,
 };
 
 const keys = {};
-window.addEventListener('keydown', e => { 
-  keys[e.code] = true; 
-  if(["Space", "ArrowUp", "ArrowDown", "KeyW", "KeyS", "ArrowLeft", "ArrowRight", "KeyA", "KeyD"].includes(e.code)) e.preventDefault(); 
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (["Space","ArrowUp","ArrowDown","KeyW","KeyS","ArrowLeft","ArrowRight","KeyA","KeyD"].includes(e.code)) e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
+// ─── Telemetry State ──────────────────────────────────────────────────────────
+// Battery
+const PACK_CAPACITY_WH = 5000;   // 5 kWh pack
+let soc = 0.92;                   // start at 92%
+
+// Lap tracking — car returns within threshold of start point
+const LAP_ORIGIN_X = lon2tile(START_LON, ZOOM);
+const LAP_ORIGIN_Y = lat2tile(START_LAT, ZOOM);
+const LAP_TRIGGER_DIST = 0.012;  // tile units — generous zone around start point
+let lapIndex = 1;
+let lapIndexSpreadsheet = 1;
+let trackIndex = 0;               // 0–1 rough progress within lap, derived from distance
+let lapDistAccum = 0;             // accumulated distance this lap (tile units)
+let lapDistTotal = 0;             // best guess at lap length (tile units)
+// Start as true since car begins at origin — must leave first before a lap counts
+let nearOriginLast = true;
+
+// Steering angle (degrees, −180 to 180)
+let steeringAngle = 0;
+
+// ─── Weather State ─────────────────────────────────────────────────────────────
+// Vancouver, roughly solar noon = 13:00 local
+// We simulate a slow-moving clock: real wall time but daylight scaled to Vancouver summer
+function solarZenith() {
+  const now = new Date();
+  const hourFrac = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  // Hour angle (solar noon at 13:00)
+  const ha = (hourFrac - 13) * 15; // degrees
+  const lat = 49.26 * Math.PI / 180;
+  const decl = 23.45 * Math.PI / 180; // approx summer solstice
+  const cosZ = Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha * Math.PI / 180);
+  return Math.acos(Math.max(-1, Math.min(1, cosZ))) * 180 / Math.PI; // degrees
+}
+
+// Random-walk helper: nudge value by up to maxStep, clamp to [lo, hi]
+function rw(v, maxStep, lo, hi) {
+  return Math.max(lo, Math.min(hi, v + (Math.random() - 0.5) * 2 * maxStep));
+}
+
+let wx = {
+  airTemp:        18.5,   // °C
+  windSpeed:      4.2,    // m/s
+  windDir:        220,    // degrees (met convention, direction FROM)
+  precipRate:     0.0,    // mm/hr
+  cloudFrac:      0.3,    // 0–1
+};
+
+// Derived irradiance from zenith + cloud cover
+function computeIrradiance() {
+  const zenith = solarZenith();
+  const cosZ = Math.max(0, Math.cos(zenith * Math.PI / 180));
+  const clearDNI = 900 * cosZ;
+  const clearGHI = 1000 * cosZ;
+  const clearDHI = 100 * cosZ;
+  const cf = wx.cloudFrac;
+  return {
+    DNI: clearDNI * (1 - 0.75 * cf),
+    GHI: clearGHI * (1 - 0.65 * cf),
+    DHI: clearDHI * (1 + 0.3 * cf),   // diffuse slightly up with cloud
+    zenith,
+  };
+}
+
+// Slow weather tick — runs every 2 seconds
+function weatherTick() {
+  wx.airTemp    = rw(wx.airTemp,    0.08, 5,   38);
+  wx.windSpeed  = rw(wx.windSpeed,  0.15, 0,   18);
+  wx.windDir    = rw(wx.windDir,    1.2,  0,   360);
+  wx.precipRate = rw(wx.precipRate, 0.02, 0,   50);
+  wx.cloudFrac  = rw(wx.cloudFrac,  0.03, 0,   1);
+}
+setInterval(weatherTick, 2000);
+
+// ─── Motor / Power Model ──────────────────────────────────────────────────────
+// Very rough EV model: pack voltage 130V nominal, power from throttle
+const PACK_VOLTAGE    = 130;   // V
+const MOTOR_EFF       = 0.92;
+const REGEN_FRACTION  = 0.35;  // fraction of brake energy recovered
+
+let batteryVoltage    = 130.5;
+let batteryCurrent    = 0;     // A
+let totalPackVoltage  = 130.5;
+let packCurrent       = 0;
+
+// Efficiency running averages
+let eff5MinAcc = 0, eff5MinN = 0;
+let effLapAcc  = 0, effLapN  = 0;
+
+// Voltage of least (weakest cell sim)
+let voltLeast = 3.95;
+
+let volt1 = 3.96, volt2 = 3.94;
+
+// ─── Telemetry Packet Builder ─────────────────────────────────────────────────
+// Called every 500ms — mirrors the shape dummyTick produces in the dashboard
+function buildPacket(now) {
+  const lat = tile2lat(car.y, ZOOM);
+  const lon = tile2lon(car.x, ZOOM);
+  const irr = computeIrradiance();
+  const kmh = car.speed / car.maxSpeed * 120;
+  const ms  = kmh / 3.6;
+
+  return {
+    timestamp: now,
+    lat, lon,
+
+    // Motion
+    VehicleVelocity:  ms,
+    SteeringAngle:    steeringAngle,
+
+    // Battery / power
+    SOC:              soc,
+    BatteryVoltage:   batteryVoltage,
+    BatteryCurrent:   batteryCurrent,
+    TotalPackVoltage: totalPackVoltage,
+    PackCurrent:      packCurrent,
+    PackPower:        packCurrent * totalPackVoltage,
+    MotorPower:       batteryCurrent * batteryVoltage * (batteryCurrent < 0 ? -1 : 1),
+    VoltSensor1:      volt1,
+    VoltSensor2:      volt2,
+    VoltageofLeast:   voltLeast,
+
+    // Efficiency (J/m — energy per metre travelled)
+    Efficiency5Minute: eff5MinN > 0 ? eff5MinAcc / eff5MinN : 0,
+    Efficiency1Hour:   eff5MinN > 0 ? eff5MinAcc / eff5MinN : 0, // same sim source
+    EfficiencyLap:     effLapN  > 0 ? effLapAcc  / effLapN  : 0,
+
+    // Energy totals (Wh consumed so far)
+    EnergyVOLExtrapolated:      (1 - soc) * PACK_CAPACITY_WH,
+    EnergyFromIntegratedPower:  (1 - soc) * PACK_CAPACITY_WH,
+
+    // Lap / track
+    LapIndex:             lapIndex,
+    LapIndexSpreadsheet:  lapIndexSpreadsheet,
+    TrackIndex:           trackIndex,
+    TrackDistSpreadsheet: trackIndex * 5040,
+
+    // Weather
+    AirTemperature:   wx.airTemp,
+    WindSpeed:        wx.windSpeed,
+    WindDirection:    wx.windDir,
+    PrecipitationRate: wx.precipRate,
+    GHI:              irr.GHI,
+    DNI:              irr.DNI,
+    DHI:              irr.DHI,
+    Zenith:           irr.zenith,
+  };
+}
+
+// Expose ingest target on window — when connected to dashboard, point this at dashboard's ingest()
+window.telemetryTarget = null; // set to dashboard's ingest function when wiring up
+
+let lastIngestTime = 0;
+function maybeEmitTelemetry(now) {
+  if (now - lastIngestTime < 500) return;
+  lastIngestTime = now;
+  const packet = buildPacket(now);
+  // Fire into dashboard if connected
+  if (typeof window.telemetryTarget === 'function') window.telemetryTarget(packet);
+  // Also always available on window for inspection / future wiring
+  window.lastTelemetry = packet;
+}
+
+// ─── Drawing ──────────────────────────────────────────────────────────────────
 function drawMap() {
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
@@ -108,7 +276,6 @@ function drawMap() {
   const tilesY = Math.ceil(canvas.height / TILE_SIZE) + 2;
   const startTX = Math.floor(car.x - tilesX / 2);
   const startTY = Math.floor(car.y - tilesY / 2);
-
   for (let dx = 0; dx <= tilesX; dx++) {
     for (let dy = 0; dy <= tilesY; dy++) {
       const tx = startTX + dx;
@@ -121,7 +288,6 @@ function drawMap() {
   }
 }
 
-// Custom helper for rounded rectangles to make the car rounder[cite: 1]
 function drawRoundedRect(ctx, x, y, width, height, radius) {
   ctx.beginPath();
   ctx.moveTo(x + radius, y);
@@ -142,27 +308,20 @@ function drawCar() {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(car.angle);
+  const cornerRadius = 15;
 
-  // Set the roundness level
-  const cornerRadius = 15; 
-
-  // === Shadow (Rounded) ===
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   drawRoundedRect(ctx, -CAR_W/2 + 5, -CAR_H/2 + 5, CAR_W, CAR_H, cornerRadius);
   ctx.fill();
 
-  // === Car Body (White, Rounder) ===
-  ctx.fillStyle = '#ffffff'; 
+  ctx.fillStyle = '#ffffff';
   drawRoundedRect(ctx, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H, cornerRadius);
   ctx.fill();
 
-  // === Windshields & Roof (Rounded dark grey area) ===
   ctx.fillStyle = '#222';
-  // Central core area for windows/roof
   drawRoundedRect(ctx, -CAR_W/2 + 4, -CAR_H/2 + 15, CAR_W - 8, 40, 5);
   ctx.fill();
 
-  // Windshield blue-glare area (Rounded)
   ctx.fillStyle = 'rgba(180,220,255,0.9)';
   drawRoundedRect(ctx, -CAR_W/2 + 6, -CAR_H/2 + 18, CAR_W - 12, 12, 3);
   ctx.fill();
@@ -170,23 +329,114 @@ function drawCar() {
   ctx.restore();
 }
 
-// --- Logic Implementation ---
+// Draw the start/finish star at the FSGP origin point
+function drawStartStar() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  // Convert origin tile coords to screen coords
+  const sx = cx + (LAP_ORIGIN_X - car.x) * TILE_SIZE;
+  const sy = cy + (LAP_ORIGIN_Y - car.y) * TILE_SIZE;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  // Trigger zone ring
+  const zoneRadius = LAP_TRIGGER_DIST * TILE_SIZE;
+  ctx.beginPath();
+  ctx.arc(0, 0, zoneRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255, 210, 0, 0.25)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Glow ring
+  const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 22);
+  glow.addColorStop(0, 'rgba(255, 210, 0, 0.5)');
+  glow.addColorStop(1, 'rgba(255, 210, 0, 0)');
+  ctx.beginPath();
+  ctx.arc(0, 0, 22, 0, Math.PI * 2);
+  ctx.fillStyle = glow;
+  ctx.fill();
+
+  // 5-point star
+  ctx.beginPath();
+  const spikes = 5, outerR = 14, innerR = 6;
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const a = (i * Math.PI) / spikes - Math.PI / 2;
+    i === 0 ? ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r)
+            : ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#ffd700';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.fill();
+  ctx.stroke();
+
+  // "START" label
+  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur = 4;
+  ctx.fillText('START', 0, 18);
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+}
+
+// Draw lap counter directly on canvas (top-right, below compass)
+function drawLapCounter() {
+  const x = canvas.width - 104;
+  const y = 96;
+
+  ctx.save();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  ctx.strokeStyle = 'rgba(255,200,50,0.6)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x, y, 84, 52, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+
+  // Label at top
+  ctx.font = '10px Courier New, monospace';
+  ctx.fillStyle = '#ffd700';
+  ctx.textBaseline = 'top';
+  ctx.fillText('LAP', x + 42, y + 8);
+
+  // Number below label
+  ctx.font = 'bold 26px Courier New, monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.textBaseline = 'top';
+  ctx.fillText(lapIndex, x + 42, y + 20);
+
+  ctx.restore();
+}
+
+
+const INGEST_INTERVAL = 500; // ms
+let lastTick = performance.now();
+
 function update() {
-  const gas   = keys['KeyW']  || keys['ArrowUp']; //[cite: 1]
-  const brake = keys['KeyS']  || keys['ArrowDown'] || keys['Space']; 
+  const now = performance.now();
+  const dt = Math.min(now - lastTick, 100); // cap at 100ms to avoid jump on tab blur
+  lastTick = now;
+
+  const gas   = keys['KeyW']  || keys['ArrowUp'];
+  const brake = keys['KeyS']  || keys['ArrowDown'] || keys['Space'];
   const left  = keys['KeyA']  || keys['ArrowLeft'];
   const right = keys['KeyD']  || keys['ArrowRight'];
 
-  if (gas) {
-    car.speed = Math.min(car.speed + car.accel, car.maxSpeed);
-  }
-
-  if (brake) {
-    car.speed = Math.max(car.speed - car.brakePower, 0);
-  }
-
-  if (!gas) car.speed *= car.friction;
-
+  if (gas)   car.speed = Math.min(car.speed + car.accel, car.maxSpeed);
+  if (brake) car.speed = Math.max(car.speed - car.brakePower, 0);
+  if (!gas)  car.speed *= car.friction;
   if (car.speed < 0.00001) car.speed = 0;
 
   if (car.speed > 0) {
@@ -196,10 +446,78 @@ function update() {
     if (right) car.angle += turn;
   }
 
+  // Steering angle in degrees (−180 to 180), proportional to key state + speed
+  const steerInput = (left ? -1 : 0) + (right ? 1 : 0);
+  const targetSteering = steerInput * 35 * Math.min(car.speed / car.maxSpeed, 1);
+  steeringAngle = steeringAngle * 0.8 + targetSteering * 0.2; // smooth
+
+  const prevX = car.x, prevY = car.y;
   car.x += Math.sin(car.angle) * car.speed;
   car.y -= Math.cos(car.angle) * car.speed;
 
-  const kmh = Math.round(car.speed / car.maxSpeed * 120);
+  // Distance moved this frame (tile units)
+  const dx = car.x - prevX, dy = car.y - prevY;
+  const distMoved = Math.sqrt(dx*dx + dy*dy);
+
+  // ── Battery / Power simulation ──────────────────────────────────────────────
+  const speedRatio = car.speed / car.maxSpeed;
+  const throttle   = gas   ? speedRatio : 0;
+  const regenBrake = brake ? speedRatio * REGEN_FRACTION : 0;
+
+  // Motor power (W): peak ~3500W at full throttle
+  const motorW = throttle * 3500 - regenBrake * 800;
+  batteryCurrent  = motorW / batteryVoltage;
+  packCurrent     = motorW / totalPackVoltage;
+
+  // Drain SOC (Wh = W * hours; dt in ms)
+  const whUsed = (motorW * (dt / 1000)) / 3600;
+  soc = Math.max(0, soc - whUsed / PACK_CAPACITY_WH);
+
+  // Voltage sags slightly under load, recovers at rest
+  const targetV = 130.5 - (1 - soc) * 12 - Math.abs(packCurrent) * 0.02;
+  batteryVoltage   = batteryVoltage   * 0.95 + targetV * 0.05;
+  totalPackVoltage = totalPackVoltage * 0.95 + targetV * 0.05;
+  volt1   = rw(volt1,   0.004, 2.5, 4.2);
+  volt2   = rw(volt2,   0.004, 2.5, 4.2);
+  voltLeast = Math.min(volt1, volt2);
+
+  // Efficiency J/m — only meaningful when moving
+  if (distMoved > 0) {
+    const distM = distMoved * TILE_SIZE * (40075000 / (Math.pow(2, ZOOM) * TILE_SIZE)); // rough metres
+    const joulesUsed = Math.abs(motorW) * (dt / 1000);
+    const jPerM = distM > 0 ? joulesUsed / distM : 0;
+    eff5MinAcc += jPerM; eff5MinN++;
+    effLapAcc  += jPerM; effLapN++;
+  }
+
+  // ── Lap detection ───────────────────────────────────────────────────────────
+  lapDistAccum += distMoved;
+
+  // TrackIndex: normalised distance within current lap (rough)
+  if (lapDistTotal > 0) {
+    trackIndex = Math.min(lapDistAccum / lapDistTotal, 1);
+  }
+
+  const odx = car.x - LAP_ORIGIN_X, ody = car.y - LAP_ORIGIN_Y;
+  const distToOrigin = Math.sqrt(odx*odx + ody*ody);
+  const nearOrigin = distToOrigin < LAP_TRIGGER_DIST;
+
+  // Must have travelled at least 0.05 tile units (~400m) before a lap can complete
+  const MIN_LAP_DIST = 0.008;
+  if (nearOrigin && !nearOriginLast && lapDistAccum > MIN_LAP_DIST) {
+    lapDistTotal = lapDistAccum;
+    lapDistAccum = 0;
+    effLapAcc = 0; effLapN = 0;
+    lapIndex++;
+    lapIndexSpreadsheet = lapIndex;
+    trackIndex = 0;
+  }
+  nearOriginLast = nearOrigin;
+
+  document.getElementById('dist-val').textContent = lapDistAccum.toFixed(3);
+
+  // ── HUD updates ─────────────────────────────────────────────────────────────
+  const kmh = Math.round(speedRatio * 120);
   const speedEl = document.getElementById('speed-val');
   speedEl.textContent = kmh;
   speedEl.style.color = brake ? '#ff4444' : '#fff';
@@ -207,20 +525,30 @@ function update() {
   const deg = ((car.angle * 180 / Math.PI) % 360 + 360) % 360;
   const dirs = ['N','NE','E','SE','S','SW','W','NW','N'];
   document.getElementById('heading-val').textContent = dirs[Math.round(deg / 45)];
-  
+
   const lat = tile2lat(car.y, ZOOM);
   const lon = tile2lon(car.x, ZOOM);
-  // LatLon coords updated dynamically
   document.getElementById('coord-val').textContent =
     `${Math.abs(lat).toFixed(6)}°N ${Math.abs(lon).toFixed(6)}°W`;
   document.getElementById('compass-needle').style.transform = `rotate(${car.angle}rad)`;
+
+  const irr = computeIrradiance();
+  document.getElementById('w-temp').textContent = wx.airTemp.toFixed(1);
+  document.getElementById('w-wind').textContent = wx.windSpeed.toFixed(1);
+  document.getElementById('w-ghi').textContent  = Math.round(irr.GHI);
+  document.getElementById('w-soc').textContent  = (soc * 100).toFixed(1);
+
+  // ── Emit telemetry ──────────────────────────────────────────────────────────
+  maybeEmitTelemetry(Date.now());
 }
 
 function loop() {
   update();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawMap();
+  drawStartStar();
   drawCar();
+  drawLapCounter();
   requestAnimationFrame(loop);
 }
 loop();
