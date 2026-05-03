@@ -306,17 +306,22 @@ function buildPacket(now) {
   };
 }
 
-// Expose ingest target on window — when connected to dashboard, point this at dashboard's ingest()
-window.telemetryTarget = null; // set to dashboard's ingest function when wiring up
+// ─── BroadcastChannel Telemetry Output ───────────────────────────────────────
+const telemetryChannel = new BroadcastChannel('telemetry');
+
+// Also keep window.telemetryTarget for same-page / iframe wiring if needed
+window.telemetryTarget = null;
 
 let lastIngestTime = 0;
 function maybeEmitTelemetry(now) {
   if (now - lastIngestTime < 500) return;
   lastIngestTime = now;
   const packet = buildPacket(now);
-  // Fire into dashboard if connected
+  // Broadcast to any listening window / tab on the same origin
+  telemetryChannel.postMessage(packet);
+  // Fire into dashboard if connected via same-page wiring
   if (typeof window.telemetryTarget === 'function') window.telemetryTarget(packet);
-  // Also always available on window for inspection / future wiring
+  // Always available on window for inspection
   window.lastTelemetry = packet;
 }
 
