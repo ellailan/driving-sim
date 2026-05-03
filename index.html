@@ -16,6 +16,20 @@
   #compass { position: absolute; top: 20px; right: 24px; width: 60px; height: 60px; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; }
   #weather-hud { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.4); border-radius: 4px; padding: 10px 16px; color: #ffd700; font-size: 10px; letter-spacing: 0.1em; line-height: 2; }
   #weather-hud span { color: #fff; }
+  #honk-alert {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ffd700;
+  font-size: 64px;
+  font-weight: bold;
+  text-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
+  opacity: 0; /* Hidden by default */
+  transition: opacity 0.1s;
+  pointer-events: none;
+  z-index: 20;
+}
 </style>
 </head>
 <body>
@@ -39,7 +53,7 @@
     <div class="hud-panel">Coords<span class="hud-val" id="coord-val" style="font-size:14px;margin-top:6px"></span></div>
     <div class="hud-panel">Lap Dist<span class="hud-val" id="dist-val" style="font-size:20px;margin-top:4px">0.000</span></div>
   </div>
-
+  <div id="honk-alert">HONK!</div>
   <!-- Add this line below to fix the visibility -->
   <div id="controls-hint">
     <b>GAS:</b> W / ↑<br>
@@ -54,6 +68,33 @@
 </div>
 
 <script>
+    // Setup Audio Context
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let oscillator = null;
+let gainNode = null;
+
+function startHonk() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  
+  oscillator = audioCtx.createOscillator();
+  gainNode = audioCtx.createGain();
+  
+  oscillator.type = 'square'; // Distinguishable "car horn" sound
+  oscillator.frequency.setValueAtTime(275, audioCtx.currentTime); // A4 note
+  gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime); // Lower volume
+  
+  oscillator.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  oscillator.start();
+}
+
+function stopHonk() {
+  if (oscillator) {
+    oscillator.stop();
+    oscillator.disconnect();
+    oscillator = null;
+  }
+}
 // ─── Canvas & Map ─────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
@@ -109,7 +150,8 @@ let car = {
 const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (["Space","ArrowUp","ArrowDown","KeyW","KeyS","ArrowLeft","ArrowRight","KeyA","KeyD"].includes(e.code)) e.preventDefault();
+  // Add "KeyH" to this array
+  if (["Space","ArrowUp","ArrowDown","KeyW","KeyS","ArrowLeft","ArrowRight","KeyA","KeyD", "KeyH"].includes(e.code)) e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -434,6 +476,15 @@ let lastTick = performance.now();
 
 function update() {
   const now = performance.now();
+  const honkEl = document.getElementById('honk-alert');
+  
+  if (keys['KeyH']) {
+    honkEl.style.opacity = "1";
+    if (!oscillator) startHonk(); // Start sound if not already playing
+  } else {
+    honkEl.style.opacity = "0";
+    stopHonk(); // Stop sound when key is released
+  }
   const dt = Math.min(now - lastTick, 100); // cap at 100ms to avoid jump on tab blur
   lastTick = now;
 
