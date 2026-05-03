@@ -16,6 +16,21 @@
   #compass { position: absolute; top: 20px; right: 24px; width: 60px; height: 60px; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; }
   #weather-hud { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,200,50,0.4); border-radius: 4px; padding: 10px 16px; color: #ffd700; font-size: 10px; letter-spacing: 0.1em; line-height: 2; }
   #weather-hud span { color: #fff; }
+  #mode-toggle {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 0; pointer-events: all; z-index: 20;
+    border: 1px solid rgba(255,200,50,0.6); border-radius: 4px; overflow: hidden;
+  }
+  .mode-btn {
+    background: #000; color: rgba(255,200,50,0.5);
+    border: none; padding: 7px 22px; font-family: 'Courier New', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    cursor: pointer; transition: background 0.2s, color 0.2s;
+  }
+  .mode-btn.active { background: #111; color: #ffd700; }
+  .mode-btn:not(.active):hover { background: #0a0a0a; color: rgba(255,200,50,0.8); }
+  .mode-divider { width: 1px; background: rgba(255,200,50,0.4); }
+  #wx-status { font-size: 9px; color: rgba(255,200,50,0.45); margin-left: 6px; vertical-align: middle; }
   #honk-alert {
   position: absolute;
   top: 40%;
@@ -120,7 +135,13 @@
       <polygon points="15,27 18,15 15,17 12,15" fill="#aaa"/>
     </svg>
   </div>
+  <div id="mode-toggle">
+    <button class="mode-btn active" id="btn-race" onclick="setMode('race')">⚡ Race</button>
+    <div class="mode-divider"></div>
+    <button class="mode-btn" id="btn-home" onclick="setMode('home')">🏠 Home</button>
+  </div>
   <div id="weather-hud">
+    <span id="wx-loc-label" style="color:#ffd700;font-size:9px;letter-spacing:0.15em;">RACE — BOWLING GREEN, KY</span><span id="wx-status"></span><br>
     TEMP &nbsp;<span id="w-temp">—</span> °C &nbsp;|&nbsp;
     WIND &nbsp;<span id="w-wind">—</span> m/s &nbsp;|&nbsp;
     GHI &nbsp;<span id="w-ghi">—</span> W/m² &nbsp;|&nbsp;
@@ -226,19 +247,19 @@ function getTile(tx, ty, zoom) {
 }
 
 // ─── Car State ────────────────────────────────────────────────────────────────
-const CAR_W = 42;
-const CAR_H = 80;
+const CAR_W = 16;
+const CAR_H = 34;
 
 let car = {
   x: lon2tile(START_LON, ZOOM),
   y: lat2tile(START_LAT, ZOOM),
   angle: 0,
   speed: 0,
-  maxSpeed: 0.006,
-  accel: 0.00012,
-  brakePower: 0.00025,
-  friction: 0.985,
-  turnSpeed: 0.055,
+  maxSpeed: 0.008,
+  accel: 0.00045,
+  brakePower: 0.0008,
+  friction: 0.97,
+  turnSpeed: 0.072,
 };
 
 const keys = {};
@@ -266,61 +287,128 @@ let lapDistTotal = 0;             // best guess at lap length (tile units)
 // Start as true since car begins at origin — must leave first before a lap counts
 let nearOriginLast = true;
 
+// Vancouver home start point
+const HOME_LAT = 49.262456;
+const HOME_LON = -123.247769;
+const HOME_ORIGIN_X = lon2tile(HOME_LON, ZOOM);
+const HOME_ORIGIN_Y = lat2tile(HOME_LAT, ZOOM);
+
 // Steering angle (degrees, −180 to 180)
 let steeringAngle = 0;
 
 // ─── Weather State ─────────────────────────────────────────────────────────────
-// Vancouver, roughly solar noon = 13:00 local
-// We simulate a slow-moving clock: real wall time but daylight scaled to Vancouver summer
-function solarZenith() {
-  const now = new Date();
-  const hourFrac = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
-  // Hour angle (solar noon at 13:00)
-  const ha = (hourFrac - 13) * 15; // degrees
-  const lat = 49.26 * Math.PI / 180;
-  const decl = 23.45 * Math.PI / 180; // approx summer solstice
-  const cosZ = Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha * Math.PI / 180);
-  return Math.acos(Math.max(-1, Math.min(1, cosZ))) * 180 / Math.PI; // degrees
-}
 
-// Random-walk helper: nudge value by up to maxStep, clamp to [lo, hi]
+const WEATHER_MODES = {
+  race: { lat: 37.0011529,  lon: -86.36837867, label: 'RACE — BOWLING GREEN, KY' },
+  home: { lat: 49.262456,   lon: -123.247769,  label: 'HOME — VANCOUVER, BC'     },
+};
+let currentMode = 'race';
+
+let wx = {
+  airTemp:    18.5,
+  windSpeed:  4.2,
+  windDir:    220,
+  precipRate: 0.0,
+  cloudFrac:  0.3,
+};
+
+// Random-walk helper — keeps sim smooth between fetches
 function rw(v, maxStep, lo, hi) {
   return Math.max(lo, Math.min(hi, v + (Math.random() - 0.5) * 2 * maxStep));
 }
 
-let wx = {
-  airTemp:        18.5,   // °C
-  windSpeed:      4.2,    // m/s
-  windDir:        220,    // degrees (met convention, direction FROM)
-  precipRate:     0.0,    // mm/hr
-  cloudFrac:      0.3,    // 0–1
-};
+// Fetch real weather from Open-Meteo (free, no key needed)
+async function fetchWeather(mode) {
+  const { lat, lon, label } = WEATHER_MODES[mode];
+  const statusEl = document.getElementById('wx-status');
+  const locEl    = document.getElementById('wx-loc-label');
+
+  // Update label immediately, don't wait for fetch
+  if (locEl) locEl.textContent = label;
+  if (statusEl) statusEl.textContent = ' ↻';
+
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&current=temperature_2m,wind_speed_10m,wind_direction_10m,precipitation,cloud_cover` +
+      `&wind_speed_unit=ms&timezone=auto`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const c = data.current;
+    if (!c) throw new Error('No current data');
+
+    wx.airTemp    = typeof c.temperature_2m     === 'number' ? c.temperature_2m     : wx.airTemp;
+    wx.windSpeed  = typeof c.wind_speed_10m     === 'number' ? c.wind_speed_10m     : wx.windSpeed;
+    wx.windDir    = typeof c.wind_direction_10m === 'number' ? c.wind_direction_10m : wx.windDir;
+    wx.precipRate = typeof c.precipitation      === 'number' ? c.precipitation      : wx.precipRate;
+    wx.cloudFrac  = typeof c.cloud_cover        === 'number' ? c.cloud_cover / 100  : wx.cloudFrac;
+
+    if (statusEl) statusEl.textContent = ' ✓';
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+    console.log(`[wx] ${label}: ${wx.airTemp.toFixed(1)}°C wind ${wx.windSpeed.toFixed(1)}m/s cloud ${(wx.cloudFrac*100).toFixed(0)}%`);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = ' ✗';
+    console.warn('[wx] fetch failed:', e.message);
+  }
+}
+
+// Mode switch — teleports car and fetches weather for new location
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('btn-race').classList.toggle('active', mode === 'race');
+  document.getElementById('btn-home').classList.toggle('active', mode === 'home');
+  const { lat, lon } = WEATHER_MODES[mode];
+  car.x = lon2tile(lon, ZOOM);
+  car.y = lat2tile(lat, ZOOM);
+  car.speed = 0;
+  car.angle = 0;
+  // Reset lap tracking for new location
+  lapIndex = 1;
+  lapIndexSpreadsheet = 1;
+  lapDistAccum = 0;
+  lapDistTotal = 0;
+  trackIndex = 0;
+  nearOriginLast = true;
+  fetchWeather(mode);
+}
+
+// Initial fetch + refresh every 5 minutes
+fetchWeather('race');
+setInterval(() => fetchWeather(currentMode), 5 * 60 * 1000);
+
+// Keep values gently drifting between API updates
+function weatherTick() {
+  wx.airTemp    = rw(wx.airTemp,    0.04, -30, 50);
+  wx.windSpeed  = rw(wx.windSpeed,  0.08,   0, 25);
+  wx.windDir    = rw(wx.windDir,    0.8,    0, 360);
+  wx.precipRate = rw(wx.precipRate, 0.01,   0, 50);
+  wx.cloudFrac  = rw(wx.cloudFrac,  0.01,   0,  1);
+}
+setInterval(weatherTick, 2000);
+
+// Solar zenith using actual car/mode latitude
+function solarZenith() {
+  const now = new Date();
+  const hourFrac = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const ha  = (hourFrac - 13) * 15;
+  const lat = WEATHER_MODES[currentMode].lat * Math.PI / 180;
+  const decl = 23.45 * Math.PI / 180;
+  const cosZ = Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha * Math.PI / 180);
+  return Math.acos(Math.max(-1, Math.min(1, cosZ))) * 180 / Math.PI;
+}
 
 // Derived irradiance from zenith + cloud cover
 function computeIrradiance() {
   const zenith = solarZenith();
-  const cosZ = Math.max(0, Math.cos(zenith * Math.PI / 180));
-  const clearDNI = 900 * cosZ;
-  const clearGHI = 1000 * cosZ;
-  const clearDHI = 100 * cosZ;
-  const cf = wx.cloudFrac;
+  const cosZ   = Math.max(0, Math.cos(zenith * Math.PI / 180));
+  const cf     = wx.cloudFrac;
   return {
-    DNI: clearDNI * (1 - 0.75 * cf),
-    GHI: clearGHI * (1 - 0.65 * cf),
-    DHI: clearDHI * (1 + 0.3 * cf),   // diffuse slightly up with cloud
+    DNI:    900  * cosZ * (1 - 0.75 * cf),
+    GHI:    1000 * cosZ * (1 - 0.65 * cf),
+    DHI:    100  * cosZ * (1 + 0.30 * cf),
     zenith,
   };
 }
-
-// Slow weather tick — runs every 2 seconds
-function weatherTick() {
-  wx.airTemp    = rw(wx.airTemp,    0.08, 5,   38);
-  wx.windSpeed  = rw(wx.windSpeed,  0.15, 0,   18);
-  wx.windDir    = rw(wx.windDir,    1.2,  0,   360);
-  wx.precipRate = rw(wx.precipRate, 0.02, 0,   50);
-  wx.cloudFrac  = rw(wx.cloudFrac,  0.03, 0,   1);
-}
-setInterval(weatherTick, 2000);
 
 // ─── Motor / Power Model ──────────────────────────────────────────────────────
 // Very rough EV model: pack voltage 130V nominal, power from throttle
@@ -474,22 +562,29 @@ function drawCar() {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(car.angle);
-  const cornerRadius = 15;
+  const cr = Math.max(2, CAR_W * 0.3);
 
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  drawRoundedRect(ctx, -CAR_W/2 + 5, -CAR_H/2 + 5, CAR_W, CAR_H, cornerRadius);
+  // Drop shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  drawRoundedRect(ctx, -CAR_W/2 + 1, -CAR_H/2 + 1, CAR_W, CAR_H, cr);
   ctx.fill();
 
-  ctx.fillStyle = '#ffffff';
-  drawRoundedRect(ctx, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H, cornerRadius);
+  // Body
+  ctx.fillStyle = '#0a1f5c';
+  drawRoundedRect(ctx, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H, cr);
   ctx.fill();
 
+  // Cabin (proportional inset)
+  const cabinInset = CAR_W * 0.18;
+  const cabinTop   = -CAR_H/2 + CAR_H * 0.28;
+  const cabinH     = CAR_H * 0.32;
   ctx.fillStyle = '#222';
-  drawRoundedRect(ctx, -CAR_W/2 + 4, -CAR_H/2 + 15, CAR_W - 8, 40, 5);
+  drawRoundedRect(ctx, -CAR_W/2 + cabinInset, cabinTop, CAR_W - cabinInset*2, cabinH, Math.max(1, cr * 0.4));
   ctx.fill();
 
-  ctx.fillStyle = 'rgba(180,220,255,0.9)';
-  drawRoundedRect(ctx, -CAR_W/2 + 6, -CAR_H/2 + 18, CAR_W - 12, 12, 3);
+  // Windscreen glint
+  ctx.fillStyle = 'rgba(180,220,255,0.85)';
+  drawRoundedRect(ctx, -CAR_W/2 + cabinInset + 1, cabinTop + 1, CAR_W - cabinInset*2 - 2, cabinH * 0.42, 1);
   ctx.fill();
 
   ctx.restore();
@@ -538,6 +633,51 @@ function drawStartStar() {
   ctx.shadowColor = 'rgba(0,0,0,0.9)';
   ctx.shadowBlur = 5;
   ctx.fillText('START', 0, outerR + 4);
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+}
+
+// Draw home star at Vancouver start point
+function drawHomeStar() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const sx = cx + (HOME_ORIGIN_X - car.x) * TILE_SIZE;
+  const sy = cy + (HOME_ORIGIN_Y - car.y) * TILE_SIZE;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  const glow = ctx.createRadialGradient(0, 0, 8, 0, 0, 52);
+  glow.addColorStop(0, 'rgba(30, 100, 255, 0.45)');
+  glow.addColorStop(1, 'rgba(30, 100, 255, 0)');
+  ctx.beginPath();
+  ctx.arc(0, 0, 52, 0, Math.PI * 2);
+  ctx.fillStyle = glow;
+  ctx.fill();
+
+  const spikes = 5, outerR = 38, innerR = 16;
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const a = (i * Math.PI) / spikes - Math.PI / 2;
+    i === 0 ? ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r)
+            : ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#1a6fff';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2.5;
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.font = 'bold 11px Courier New, monospace';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 5;
+  ctx.fillText('HOME', 0, outerR + 4);
   ctx.shadowBlur = 0;
 
   ctx.restore();
@@ -662,7 +802,9 @@ function update() {
     trackIndex = Math.min(lapDistAccum / lapDistTotal, 1);
   }
 
-  const odx = car.x - LAP_ORIGIN_X, ody = car.y - LAP_ORIGIN_Y;
+  const lapOriginX = currentMode === 'home' ? HOME_ORIGIN_X : LAP_ORIGIN_X;
+  const lapOriginY = currentMode === 'home' ? HOME_ORIGIN_Y : LAP_ORIGIN_Y;
+  const odx = car.x - lapOriginX, ody = car.y - lapOriginY;
   const distToOrigin = Math.sqrt(odx*odx + ody*ody);
   const nearOrigin = distToOrigin < LAP_TRIGGER_DIST;
 
@@ -711,6 +853,7 @@ function loop() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawMap();
   drawStartStar();
+  drawHomeStar();
   drawCar();
   drawLapCounter();
   requestAnimationFrame(loop);
